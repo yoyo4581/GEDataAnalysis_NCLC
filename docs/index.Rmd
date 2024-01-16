@@ -1,0 +1,365 @@
+---
+title: "Gene Expression data analysis of ETS2 mediated tumor
+suppressive function and MET oncogene inhibition in human non-small cell lung cancer"
+author: "Yahya Al Sabeh"
+date: "2024-01-16"
+output: html_document
+---
+
+```{r, message = FALSE}
+library(oligo)
+library(limma)
+library(fpc)
+library(Biobase)
+```
+
+## Loading data and dataset annotation
+
+```{r, results = 'hide'}
+dir.path <- "C:\\Users\\Yahya\\Downloads\\GSE43458_RAW\\"
+fns <- sort(list.celfiles(path=dir.path,full.names=TRUE))
+
+data.affy <- read.celfiles(filenames=fns)
+
+raw_data <-exprs(data.affy)
+```
+
+  Previewing data
+
+```{r}
+head(raw_data)[1:5]
+head(probeNames(data.affy))
+```
+
+  Annotating data
+
+```{r}
+colnames(raw_data)[1:40]<-paste0(rep(('LAN'), each=40),"_",1:40)
+colnames(raw_data)[41:70]<-paste0(rep(('Normal'), each=30),"_",1:30)
+colnames(raw_data)[71:110]<-paste0(rep(('LAS'), each=40),"_",1:40)
+colnames(raw_data)
+```
+
+  Simple Log transform, Log2(Intensity)
+
+```{r}
+log2_raw<- log2(raw_data)
+```
+
+## Sample Outlier Detection
+
+### PCA plot
+
+```{r}
+PCA_raw <-prcomp(t(log2_raw), scale. = FALSE)
+
+dataGG <- data.frame(PC1 = PCA_raw$x[,1], PC2 = PCA_raw$x[,2])
+```
+
+  Reframing window and plotting
+
+```{r}
+cat(max(dataGG[,1]),min(dataGG[,1]),max(dataGG[,2]),min(dataGG[,2]))
+plot(dataGG[1:40,], col='red', main='PCA plot of sample points for outlier detection', xlim=c(-1500,800), ylim=c(-500,600))
+points(dataGG[41:70,], col='blue')
+points(dataGG[71:110,], col='orange')
+legend("topright", legend=c('Lung Adeno Non-smoke', 'Lung Normal Tissue', 'Lung Adeno Smoke'), col=c('red', 'blue', 'orange'), pch=20)
+text(dataGG,label=dimnames(dataGG)[[1]],pos=1,cex=0.5)
+```
+
+  Normal 6, LAS 19, and LAS3 are all likely outliers
+
+
+### Sample CV vs Mean Plot
+```{r}
+dat.mean <- apply(log2_raw,2,mean) 
+dat.sd <- sqrt(apply(log2_raw,2,var)) 
+dat.cv <- dat.sd/dat.mean #calculate cv
+par(mfrow=c(1,1))
+plot(dat.mean,dat.cv,main="Lung cancer dataset\nSample CV vs. Mean",xlab="Mean",ylab="CV",col='blue',cex=1.5,type="n")
+points(dat.mean[1:40],dat.cv[1:40], col='red')
+points(dat.mean[41:70],dat.cv[41:70], col='blue')
+points(dat.mean[71:110], dat.cv[71:110], col='orange')
+text(dat.mean,dat.cv,label=dimnames(log2_raw)[[2]],pos=1,cex=0.5)
+```
+
+  Normal 6and LAS3 are all likely outliers
+
+### Pearson Correlation of intensity data
+```{r}
+dat <- t(raw_data)
+corr_matrix <- cor(raw_data, use="pairwise.complete.obs", method="pearson")
+dat.avg <- apply(corr_matrix,1,mean)
+par(oma=c(3,0.1,0.1,0.1))
+plot(c(1,length(dat.avg)),range(dat.avg),type="n",xlab="",ylab="Avg c
+orrelation",main="Avg correlation of Tumor/Normal samples",axes=F)
+points(dat.avg,bg="red",col=1,pch=21,cex=1.25)
+axis(1,at=c(1:length(dat.avg)),labels=dimnames(dat)[[1]],las=2,cex.lab=0.4,cex.axis=0.6)
+axis(2)
+abline(v=seq(0.5,120.5,1),col="grey")
+```
+
+  LAS 3, and Normal6 are Possible outliers.
+  Possibly LAN19
+
+### Hierarchical Clustering using Euclidean Distance
+```{r}
+par(mfrow=c(1,1))
+dat <- t(raw_data) #transpose dat
+dat.dist <- dist(dat,method="euclidean") # calculate distance
+dat.clust <- hclust(dat.dist,method="single") # calculate cluster
+plot(dat.clust,labels=names(dat),cex=0.5)
+```
+LAN5 Possible outliers
+
+### Pairwise Pearson Correlation Heatmap
+```{r, message = FALSE}
+library(gplots)
+```
+
+```{r}
+corr_matrix = cor(raw_data, use="pairwise.complete.obs", method="pearson")
+layout(matrix(c(1,1,1,1,1,1,1,1,2,2), 5, 2, byrow = TRUE))
+par(mar=c(1,1,1,1))
+cx<-rev(colorpanel(25, "yellow","black","blue"))
+leg<- seq(min(corr_matrix, na.rm=T), max(corr_matrix, na.rm=T), length=10)
+image(corr_matrix, main="Correlation plot LAN, LAS, Normal", axes=F, col=cx)
+axis(1, at=seq(0, 1, length=ncol(corr_matrix)), label=dimnames(corr_matrix)[[2]], cex.axis=0.9, las=2)
+image(as.matrix(leg), col=cx, axes=F)
+tmp<-round(leg,2)
+axis(1, at=seq(0,1,length=length(leg)), labels=tmp, cex.axis=1)
+```
+
+
+  Normal 6, LAS 3 are definely outliers. 
+
+  LAN 19 and LAN32 are suspect however they are not corroborated by other plots.
+
+  So only Normal 6 and LAS3 will be removed.
+
+## Sample Outlier Removal
+```{r}
+colnames(data.affy)[1:40]<-paste0(rep(('LAN'), each=40),"_",1:40)
+colnames(data.affy)[41:70]<-paste0(rep(('Normal'), each=30),"_",1:30)
+colnames(data.affy)[71:110]<-paste0(rep(('LAS'), each=40),"_",1:40)
+colnames(data.affy)
+outliers<-c('Normal_6', 'LAS_3')
+raw_data_filt<-data.affy[,!(colnames(data.affy) %in% outliers)]
+colnames(raw_data_filt)
+```
+## Normalizing counts and applying background correction
+```{r}
+normalised<-rma(raw_data_filt)
+eset<-exprs(normalised)
+```
+
+
+## Filtering low genes by Oligo Method
+```{r}
+par(mfrow=c(1,1))
+hist_res<-hist(rowMedians(eset), xlab='log2 RMA normalized intensity', main='Histogram of data pre gene filtering')
+
+threshold<-5
+
+abline(v=threshold, col="coral", lwd=2)
+```
+
+  Now we check if at least 30 expression values across genes are greater than this threshold
+  
+```{r}
+samples_cutoff<-30
+
+idx_man_threshold<-apply(eset, 1, function(x){
+  sum(x > threshold) >=samples_cutoff})
+
+table(idx_man_threshold)
+```
+  
+  Remove the genes
+
+```{r}
+eset<-subset(eset, idx_man_threshold)
+hist_res<-hist(rowMedians(eset), xlab='log2 RMA normalized intensity', main='Histogram of data post gene filtering')
+abline(v=threshold, col="coral", lwd=2)
+```
+
+## Statistical Analysis- 2-way Anova with 2 Levels
+```{r}
+aov2.all.genes <- function(x,s1,s2, s3, s4) {
+  x1 <- as.numeric(x[s1])
+  x2 <- as.numeric(x[s2])
+  y1 <- as.numeric(x[s3])
+  y2 <- as.numeric(x[s4])
+  fac <- c(rep('S-',length(x1)), rep('S+',length(x2)), rep('S-', 40), rep('S+',39), rep('S-',length(y2)))
+  can <- c(rep('C+', 40), rep('C-', length(y2)), rep('C+', length(x2)),rep('C+', length(y1)),rep('C-', length(y2)))
+  a.dat <- data.frame(as.factor(fac),as.factor(can), c(x1,x2,y1,y2))
+  names(a.dat) <- c('smoke','cancer','express')
+  p.out <- summary(aov(express~smoke+cancer, a.dat))[[1]][1:2,5]
+  #p.out <- summary(aov(express~factor, a.dat))[[1]][1,4]	# use to get F-statistic
+  return(as.numeric(p.out))
+}
+rawp <- apply(eset,1,aov2.all.genes,s1=colnames(eset[,1:69]),s2=colnames(eset[,70:108]),
+              s3=c(colnames(eset[,1:40]),colnames(eset[,70:108])), s4=c(colnames(eset[,41:69])))
+rownames(rawp)<-c('smoke','cancer')
+```
+
+## Adjusting p-value using the Bonferroni Correction
+```{r}
+library(multtest)
+res1_smoke<-mt.rawp2adjp(rawp['smoke',],c("Holm","Bonferroni"))
+res1_cancer<-mt.rawp2adjp(rawp['cancer',],c("Holm","Bonferroni"))
+
+par(mfrow=c(1,1))
+smoke_adjp<-res1_smoke$adjp[,3]
+hist(smoke_adjp, main='Histogram of p-values for smoke significant genes from 2-ANOVA', xlab='adjusted p-value')
+abline(v=0.05, col="coral", lwd=2)
+
+cancer_adjp<-res1_cancer$adjp[,3]
+hist(cancer_adjp, main='Histogram of p-values for cancer significant genes from 2-ANOVA', xlab='adjusted p-value')
+abline(v=0.05, col="coral", lwd=2)
+```
+
+## DEG Volcano Plots
+```{r}
+control_smoke <- apply(eset[,1:69], 1, mean)
+exp_smoke <- apply(eset[,70:108], 1, mean)
+foldlog_smoke <- exp_smoke-control_smoke
+
+lin_foldsmoke<- 2^foldlog_smoke
+linMax_foldsmoke<- max(lin_foldsmoke)
+linMax_foldsmoke
+
+linMin_foldsmoke<- min(lin_foldsmoke)
+linMin_foldsmoke
+
+orderedP_smoke<-res1_smoke$adjp[,3][order(res1_smoke$index)]
+```
+
+### DEG Volcano Plot 1
+```{r}
+par(mfrow=c(1,1))
+pv_trans<--log10(orderedP_smoke)
+plot(range(pv_trans),range(foldlog_smoke),type='n',xlab='-1*log10(p-value)',ylab='fold change log2',main='Volcano Plot\n Smoke control and
+experimental group differences')
+points(pv_trans,foldlog_smoke,col='black',pch=21,bg=1)
+points(pv_trans[(pv_trans> -log10(.05)&foldlog_smoke>log2(2))],foldlog_smoke[(pv_trans> -
+                                                                   log10(.05)&foldlog_smoke>log2(2))],col=1,bg=2,pch=21)
+points(pv_trans[(pv_trans> -log10(.05)&foldlog_smoke< -
+                     log2(2))],foldlog_smoke[(pv_trans> -log10(.05)&foldlog_smoke< -
+                                             log2(2))],col=1,bg=3,pch=21)
+abline(v= -log10(.05))
+abline(h= -log2(2))
+abline(h=log2(2))
+
+sig_smokegenes<-rownames(eset[which(pv_trans>-log10(0.05)),])
+head(sig_smokegenes)
+express_smokegenes<-rownames(eset[which(abs(foldlog_smoke)>1),])
+head(express_smokegenes)
+Significant_SmokeGenes<-eset[intersect(sig_smokegenes,express_smokegenes),]
+head(Significant_SmokeGenes)
+```
+
+### DEG Volcano Plot 2
+```{r}
+#Volcano plot #2
+control_cancer <- apply(eset[,41:69], 1, mean)
+exp_cancer <- apply(eset[,c(colnames(eset[,70:108]), colnames(eset[,1:40]))], 1, mean)
+foldlog_cancer <- exp_cancer-control_cancer
+
+lin_foldcancer<- 2^foldlog_cancer
+linMax_foldcancer<- max(lin_foldcancer)
+linMax_foldcancer
+
+linMin_foldsmoke<- min(lin_foldcancer)
+linMin_foldsmoke
+
+orderedP_cancer<-res1_cancer$adjp[,3][order(res1_cancer$index)]
+
+
+
+par(mfrow=c(1,1))
+pv_trans<--log10(orderedP_cancer)
+plot(range(pv_trans),range(foldlog_cancer),type='n',xlab='-1*log10(p-value)',ylab='fold change log2',main='Volcano Plot\n Cancer control and
+experimental group differences')
+points(pv_trans,foldlog_cancer,col='black',pch=21,bg=1)
+points(pv_trans[(pv_trans> -log10(.05)&foldlog_cancer>log2(2))],foldlog_cancer[(pv_trans> -
+                                                                                log10(.05)&foldlog_cancer>log2(2))],col=1,bg=2,pch=21)
+points(pv_trans[(pv_trans> -log10(.05)&foldlog_cancer< -
+                   log2(2))],foldlog_cancer[(pv_trans> -log10(.05)&foldlog_cancer< -
+                                              log2(2))],col=1,bg=3,pch=21)
+abline(v= -log10(.05))
+abline(h= -log2(2))
+abline(h=log2(2))
+
+sig_cancergenes<-rownames(eset[which(pv_trans>-log10(0.05)),])
+head(sig_cancergenes)
+express_cancergenes<-rownames(eset[which(abs(foldlog_cancer)>1),])
+head(express_cancergenes)
+Significant_CancerGenes<-eset[intersect(sig_cancergenes,express_cancergenes),]
+head(Significant_CancerGenes)
+```
+
+## Applying Dimensionality reduction and K-Means Clustering Classification Unsupervised Learning approach for predicting membership in two groups.
+
+### Smoke vs Non-smoke Groups
+```{r}
+#PCA1
+
+smoke.pca<-prcomp(t(Significant_SmokeGenes))
+smoke.loadings<-smoke.pca$x[,1:2]
+smoke.loadings[0:5,]
+cl_smoke<-kmeans(smoke.loadings, centers=2, iter.max=1000)
+
+library(stringr)
+plot(smoke.loadings, col=cl_smoke$cluster, cex=1, main="Spectral
+     PCA k-Means clustering of all significant DEG smoke genes")
+points(cl_smoke$centers, col = 1:4, pch = '*', cex=2.5)
+
+
+trunc_labels<-substr(names(cl_smoke$cluster), 1,3)
+text(smoke.loadings, trunc_labels, cex=0.5, pos=3)
+```
+
+
+26 errors falsely assigned to Smoking group,so the distinction is not as significant
+
+
+### Cancer vs Control Groups
+```{r}
+cancer.pca<-prcomp(t(Significant_CancerGenes))
+cancer.loadings<-cancer.pca$x[,1:2]
+cancer.loadings[0:5,]
+cl_cancer<-kmeans(cancer.loadings, centers=2, iter.max=1000)
+
+library(stringr)
+plot(cancer.loadings, col=cl_cancer$cluster, cex=1, main="Spectral
+     PCA k-Means clustering of all significant DEG cancer genes")
+points(cl_cancer$centers, col = 1:4, pch = '*', cex=2.5)
+
+
+trunc_labels<-substr(names(cl_cancer$cluster), 1,3)
+text(cancer.loadings, trunc_labels, cex=0.5, pos=3)
+```
+
+  6 errors, the distinction is more pronounced
+
+## Top5 Discriminant Genes from Smoke
+```{r}
+top_smokeValue<-sort(foldlog_smoke[express_smokegenes], decreasing=TRUE)
+top5_smokeGenes<-head(top_smokeValue)
+top5_smokeGenes
+
+bottom5_smokeGenes<-tail(top_smokeValue)
+bottom5_smokeGenes
+```
+
+## Top5 Discriminant Genes from Cancer
+```{r}
+top_cancerValue<-sort(foldlog_cancer[express_cancergenes], decreasing=TRUE)
+top5_cancerGenes<-head(top_cancerValue)
+top5_cancerGenes
+
+bottom5_cancerGenes<-tail(top_cancerValue)
+bottom5_cancerGenes
+```
+
